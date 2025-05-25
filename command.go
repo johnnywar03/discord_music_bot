@@ -18,12 +18,12 @@ var commands = []*discordgo.ApplicationCommand{
 
 	{
 		Name:        "search",
-		Description: "Search music from youtube",
+		Description: "Search video from youtube",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionString,
 				Name:        "name",
-				Description: "Name of the song",
+				Description: "Name of the video",
 				Required:    true,
 			},
 		},
@@ -31,12 +31,12 @@ var commands = []*discordgo.ApplicationCommand{
 
 	{
 		Name:        "play",
-		Description: "Play music from youtube",
+		Description: "Play video from youtube",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionString,
 				Name:        "url",
-				Description: "URL of the music",
+				Description: "URL of the video",
 				Required:    true,
 			},
 		},
