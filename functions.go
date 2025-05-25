@@ -5,6 +5,7 @@ import (
 )
 
 func joinVoiceChannel(session *discordgo.Session, interactionCreatedEvent *discordgo.InteractionCreate) (err error) {
+	// Check if joined a voice channel
 	if checkJoinedVoiceChannel(session, interactionCreatedEvent.GuildID) {
 		return nil
 	}
@@ -21,6 +22,7 @@ func joinVoiceChannel(session *discordgo.Session, interactionCreatedEvent *disco
 		println("Failed to join a voice channel, ", err.Error())
 		return err
 	}
+
 	return nil
 }
 

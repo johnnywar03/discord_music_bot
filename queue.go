@@ -134,3 +134,12 @@ func (queue *VideoQueue) toArray() (arrayOfVideos []Video, err error) {
 
 	return arrayOfVideos, nil
 }
+
+func (queue *VideoQueue) getTheFirst() (video *Video) {
+	video = &Video{
+		Id:    queue.CurrentVideo.Id,
+		Title: queue.CurrentVideo.Title,
+	}
+
+	return video
+}

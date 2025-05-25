@@ -7,7 +7,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"syscall"
 
 	"github.com/bwmarrin/discordgo"
@@ -22,17 +21,14 @@ type jsonBotConfig struct {
 var botConfig jsonBotConfig
 var thisFilePath string
 var videoQueue *VideoQueue
-var platform string
+var musicBot *MusicBot
 
 func main() {
-	// Check OS platform
-	platform = runtime.GOOS
-
 	// Get executable directory
 	executable, _ := os.Executable()
 	thisFilePath = filepath.Dir(executable)
 	// Open env.json file
-	jsonByte, err := os.ReadFile(thisFilePath + "\\env.json")
+	jsonByte, err := os.ReadFile(thisFilePath + "/env.json")
 	if err != nil {
 		panic(err.Error())
 	}
@@ -55,6 +51,11 @@ func main() {
 
 	// Create video queue
 	videoQueue = &VideoQueue{}
+
+	// Create music bot instance
+	musicBot = &MusicBot{}
+	musicBot.IsPlaying = false
+	musicBot.NowPlaying = nil
 
 	// Start discord bot
 	err = client.Open()
@@ -119,6 +120,7 @@ func applicationCommandHandler(session *discordgo.Session, interactionCreatedEve
 			responseToInteraction(session, interactionCreatedEvent.Interaction, "Failed to join the voice channel.")
 			return
 		}
+		playVideo(session, interactionCreatedEvent.GuildID)
 	case "leave":
 		leaveVoiceChannel(session, interactionCreatedEvent)
 	case "play":
@@ -144,6 +146,7 @@ func applicationCommandHandler(session *discordgo.Session, interactionCreatedEve
 		}
 		// Update the interaction
 		updateInteractionResponse(session, interactionCreatedEvent.Interaction, fmt.Sprintf("%s %s", title, " added to queue."))
+		playVideo(session, interactionCreatedEvent.GuildID)
 	case "search":
 		responseToInteraction(session, interactionCreatedEvent.Interaction, "Processing...")
 		// Search for videos
@@ -220,6 +223,7 @@ func applicationCommandHandler(session *discordgo.Session, interactionCreatedEve
 		videoQueue.CurrentVideo = nil
 		responseToInteraction(session, interactionCreatedEvent.Interaction, "Queue cleared")
 	case "skip":
+		// Wait to rewrite
 		title := videoQueue.CurrentVideo.Title
 		videoQueue.deleteFirst()
 		responseToInteraction(session, interactionCreatedEvent.Interaction, "Skipped "+title)
@@ -263,16 +267,21 @@ func interactionComponentHandler(session *discordgo.Session, interactionCreatedE
 			updateComponentReponse(session, interactionCreatedEvent.Interaction, "Error: failed to add video to the queue.")
 			return
 		}
+		updateInteractionResponse(session, interactionCreatedEvent.Interaction, title+" added to queue.")
 		err = joinVoiceChannel(session, interactionCreatedEvent)
 		if err != nil {
-			responseToInteraction(session, interactionCreatedEvent.Interaction, "Failed to join the voice channel, video added to queue.")
+			sendMessageToChannel(session, "Failed to join the voice channel.")
 			return
 		}
-		updateInteractionResponse(session, interactionCreatedEvent.Interaction, title+" added to queue.")
+		playVideo(session, interactionCreatedEvent.GuildID)
 	default:
 		println("Received an unknown interaction component.")
 		updateComponentReponse(session, interactionCreatedEvent.Interaction, "Error: unknown interaction.")
 	}
+}
+
+func sendMessageToChannel(session *discordgo.Session, content string) {
+	session.ChannelMessageSend(botConfig.CommandChannelId, content)
 }
 
 func responseToInteraction(session *discordgo.Session, interaction *discordgo.Interaction, content string) {

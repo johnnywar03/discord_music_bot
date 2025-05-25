@@ -1,14 +1,25 @@
 package main
 
 import (
-	"golang.org/x/text/encoding/traditionalchinese"
+	"os"
+	"path/filepath"
 )
 
-func decodeBIG5(byteString []byte) (string, error) {
-	utfBytes, err := traditionalchinese.Big5.NewDecoder().Bytes(byteString)
+func remove(filePath string) (err error) {
+	directory, err := os.Open(filePath)
 	if err != nil {
-		println("Fail to convert big5 to utf-8. ", err.Error())
-		return "", err
+		return err
 	}
-	return string(utfBytes), nil
+	defer directory.Close()
+	files, err := directory.Readdirnames(-1)
+	if err != nil {
+		return err
+	}
+	for _, file := range files {
+		err = os.RemoveAll(filepath.Join(filePath, file))
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

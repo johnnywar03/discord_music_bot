@@ -9,17 +9,9 @@ import (
 )
 
 func getTitle(id string) (title string) {
-	// Check the OS platform, if windows, specify a path to yt-dlp.exe
-	var ytdlp string
-	if platform == "windows" {
-		ytdlp = thisFilePath + "\\yt-dlp.exe"
-	} else {
-		ytdlp = "yt-dlp"
-	}
-
 	// Run yt-dlp from cmd
 	cmd := exec.Command(
-		ytdlp,
+		"yt-dlp",
 		[]string{
 			"--skip-download",
 			"--get-title",
@@ -34,37 +26,20 @@ func getTitle(id string) (title string) {
 		return ""
 	}
 
-	// Convert byte array to string (utf-8)
-	if platform != "windows" {
-		return string(output)
-	}
-
-	// Convert byte array to string (big5) **Not accurate
-	decodedString, err := decodeBIG5(output)
-	if err != nil {
-		return ""
-	}
-
-	return strings.TrimSuffix(decodedString, "\n")
+	return strings.TrimSuffix(string(output), "\n")
 }
 
 func search(title string) (videoArray []Video, err error) {
-	// Check the OS platform, if windows, specify a path to yt-dlp.exe
-	var ytdlp string
-	if platform == "windows" {
-		ytdlp = thisFilePath + "\\yt-dlp.exe"
-	} else {
-		ytdlp = "yt-dlp"
-	}
-
 	maxResult := 4
 	// Run yt-dlp from cmd
 	cmd := exec.Command(
-		ytdlp,
+		"yt-dlp",
 		[]string{
 			"--skip-download",
 			"--no-playlist",
+			"--flat-playlist",
 			"--quiet",
+			"--ignore-errors",
 			"--get-id",
 			"--get-title",
 			"--default-search", "ytsearch",
@@ -80,19 +55,8 @@ func search(title string) (videoArray []Video, err error) {
 
 	// Scan the output line by line
 	var scanner *bufio.Scanner
-	if platform != "windows" {
-		scanner = bufio.NewScanner(bytes.NewReader(output))
-		scanner.Split(bufio.ScanLines)
-
-	} else if platform == "windows" {
-		decodedString, err := decodeBIG5(output)
-		if err != nil {
-			return nil, err
-		}
-
-		scanner = bufio.NewScanner(strings.NewReader(decodedString))
-		scanner.Split(bufio.ScanLines)
-	}
+	scanner = bufio.NewScanner(bytes.NewReader(output))
+	scanner.Split(bufio.ScanLines)
 
 	// Scan the output line by line and convert to array
 	var text []string
@@ -102,11 +66,35 @@ func search(title string) (videoArray []Video, err error) {
 
 	// Loop all the scanned text and append video array
 	for loopIndex := 0; loopIndex < len(text); loopIndex = loopIndex + 2 {
-		videoArray = append(videoArray, Video{
-			Id:    strings.TrimSuffix(text[loopIndex+1], "\n"),
-			Title: strings.TrimSuffix(text[loopIndex], "\n"),
-		})
+		if len(strings.TrimSuffix(text[loopIndex+1], "\n")) == 11 {
+			videoArray = append(videoArray, Video{
+				Id:    strings.TrimSuffix(text[loopIndex+1], "\n"),
+				Title: strings.TrimSuffix(text[loopIndex], "\n"),
+			})
+		}
 	}
 
 	return videoArray, nil
+}
+
+func download(id string) (filePath string, err error) {
+	downloadPath := thisFilePath + "/video/"
+	// Run yt-dlp from cmd
+	cmd := exec.Command(
+		"yt-dlp",
+		[]string{
+			fmt.Sprintf("-P %s", downloadPath),
+			"-o%(id)s.%(ext)s",
+			"-x",
+			"--audio-format", "mp3",
+			"--audio-quality", "128K",
+			id,
+		}...,
+	)
+	err = cmd.Run()
+	if err != nil {
+		println("Error in downloading video: ", err.Error())
+		return "", err
+	}
+	return fmt.Sprintf("%s/video/%s.mp3", thisFilePath, id), nil
 }
