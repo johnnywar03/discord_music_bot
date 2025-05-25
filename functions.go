@@ -26,20 +26,18 @@ func joinVoiceChannel(session *discordgo.Session, interactionCreatedEvent *disco
 	return nil
 }
 
-func leaveVoiceChannel(session *discordgo.Session, interactionCreatedEvent *discordgo.InteractionCreate) {
+func leaveVoiceChannel(session *discordgo.Session, guildId string) (err error) {
 	// Check the bot voice connection
-	voiceConnection, joined := session.VoiceConnections[interactionCreatedEvent.GuildID]
+	voiceConnection, joined := session.VoiceConnections[guildId]
 	if joined {
 		// Disconnect if joined a voice channel
 		err := voiceConnection.Disconnect()
 		if err != nil {
 			println("Failed to leave the voice channel, ", err.Error())
-			responseToInteraction(session, interactionCreatedEvent.Interaction, "Failed to leave voice channel.")
+			return err
 		}
-		responseToInteraction(session, interactionCreatedEvent.Interaction, "Bye!")
-	} else if !joined {
-		responseToInteraction(session, interactionCreatedEvent.Interaction, "The bot has already left.")
 	}
+	return nil
 }
 
 func checkJoinedVoiceChannel(session *discordgo.Session, guildId string) (isJoined bool) {

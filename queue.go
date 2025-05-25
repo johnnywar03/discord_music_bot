@@ -19,7 +19,7 @@ func (queue *VideoQueue) add(id string) (title string, err error) {
 	// Get video title
 	title = getTitle(id)
 	if title == "" {
-		return "", errors.New("Cannot get video title.")
+		return "", errors.New("cannot get video title")
 	}
 
 	newVideo := &VideoNode{
@@ -77,7 +77,7 @@ func (queue *VideoQueue) deleteSpecific(id string) (title string, err error) {
 	// Error if the video is not in the queue
 	if title == "" {
 		println("Failed to delete video from the queue.")
-		return "", errors.New("Video not exist.")
+		return "", errors.New("video not exist")
 	}
 
 	return title, nil
@@ -113,7 +113,7 @@ type Video struct {
 
 func (queue *VideoQueue) toArray() (arrayOfVideos []Video, err error) {
 	if queue.CurrentVideo == nil {
-		return nil, errors.New("Empty queue.")
+		return nil, errors.New("empty queue")
 	}
 
 	// Loop through the linked list

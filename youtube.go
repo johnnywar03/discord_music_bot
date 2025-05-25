@@ -54,8 +54,7 @@ func search(title string) (videoArray []Video, err error) {
 	}
 
 	// Scan the output line by line
-	var scanner *bufio.Scanner
-	scanner = bufio.NewScanner(bytes.NewReader(output))
+	scanner := bufio.NewScanner(bytes.NewReader(output))
 	scanner.Split(bufio.ScanLines)
 
 	// Scan the output line by line and convert to array

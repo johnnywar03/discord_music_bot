@@ -2,6 +2,7 @@ package main
 
 import (
 	"io"
+	"sync"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/jonas747/dca"
@@ -11,6 +12,7 @@ type MusicBot struct {
 	IsPlaying        bool
 	NowPlaying       *Video
 	StreamingSession *dca.StreamingSession
+	Mutex            sync.Mutex
 }
 
 func playVideo(session *discordgo.Session, guildId string) {
@@ -22,6 +24,8 @@ func playVideo(session *discordgo.Session, guildId string) {
 	if !checkJoinedVoiceChannel(session, guildId) {
 		return
 	}
+
+	musicBot.Mutex.Lock()
 
 	voiceConnection := session.VoiceConnections[guildId]
 
@@ -58,12 +62,9 @@ func playVideo(session *discordgo.Session, guildId string) {
 		done := make(chan error)
 		musicBot.StreamingSession = dca.NewStream(dcaEncodeSession, voiceConnection, done)
 
-		select {
-		case err = <-done:
-			if err != nil && err != io.EOF {
-				println("Error: playing video, ", err.Error())
-				break
-			}
+		err = <-done
+		if err != nil && err != io.EOF {
+			println("Error: playing video, ", err.Error())
 		}
 
 		voiceConnection.Speaking(false)
@@ -77,8 +78,11 @@ func playVideo(session *discordgo.Session, guildId string) {
 	// Clean up the music bot after playing all video
 	musicBot.IsPlaying = false
 	musicBot.NowPlaying = nil
-	voiceConnection.Disconnect()
 
 	// Remove all downloaded video
-	remove(thisFilePath + "\\video")
+	remove(thisFilePath + "/video")
+
+	// Unlock mutex
+	musicBot.Mutex.Unlock()
+	leaveVoiceChannel(session, guildId)
 }

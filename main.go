@@ -122,7 +122,11 @@ func applicationCommandHandler(session *discordgo.Session, interactionCreatedEve
 		}
 		playVideo(session, interactionCreatedEvent.GuildID)
 	case "leave":
-		leaveVoiceChannel(session, interactionCreatedEvent)
+		err := leaveVoiceChannel(session, interactionCreatedEvent.GuildID)
+		if err != nil {
+			responseToInteraction(session, interactionCreatedEvent.Interaction, "Failed to leave the voice channel.")
+			return
+		}
 	case "play":
 		// Join the voice channel if not connected to voice channel
 		err := joinVoiceChannel(session, interactionCreatedEvent)

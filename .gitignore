@@ -23,3 +23,4 @@ go.work
 *.json
 video/
 video/*
+main
