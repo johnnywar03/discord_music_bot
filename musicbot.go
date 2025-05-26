@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"sync"
 
@@ -13,9 +14,11 @@ type MusicBot struct {
 	NowPlaying       *Video
 	StreamingSession *dca.StreamingSession
 	Mutex            sync.Mutex
+	SkipChannel      chan bool
+	StopChannel      chan bool
 }
 
-func playVideo(session *discordgo.Session, guildId string) {
+func (musicbot *MusicBot) playVideo(session *discordgo.Session, guildId string) {
 	// Check if the bot is playing video
 	if musicBot.IsPlaying {
 		return
@@ -62,17 +65,46 @@ func playVideo(session *discordgo.Session, guildId string) {
 		done := make(chan error)
 		musicBot.StreamingSession = dca.NewStream(dcaEncodeSession, voiceConnection, done)
 
-		err = <-done
-		if err != nil && err != io.EOF {
-			println("Error: playing video, ", err.Error())
+		skipped := false
+		stopped := false
+
+		// Wait for completion, skip, or stop
+		select {
+		case err = <-done:
+			if err != nil && err != io.EOF {
+				println("Error: playing video, ", err.Error())
+			}
+		case <-musicBot.SkipChannel:
+			skipped = true
+		case <-musicBot.StopChannel:
+			stopped = true
 		}
 
 		voiceConnection.Speaking(false)
-		musicBot.StreamingSession = nil
-		// Remove played video
-		videoQueue.deleteFirst()
+
+		// Stop the streaming session if it's still running
+		if musicBot.StreamingSession != nil {
+			musicBot.StreamingSession.SetPaused(true)
+			musicBot.StreamingSession = nil
+		}
+
 		// Clean up dca encode session
 		dcaEncodeSession.Cleanup()
+
+		// Remove played/skipped video
+		videoQueue.deleteFirst()
+
+		// If stopped, break out of the loop
+		if stopped {
+			sendMessageToChannel(session, "Stopped: "+musicbot.NowPlaying.Title)
+			videoQueue.CurrentVideo = nil
+			break
+		}
+
+		// If skipped, send skip message
+		if skipped {
+			sendMessageToChannel(session, "Skipped: "+musicBot.NowPlaying.Title)
+		}
 	}
 
 	// Clean up the music bot after playing all video
@@ -85,4 +117,26 @@ func playVideo(session *discordgo.Session, guildId string) {
 	// Unlock mutex
 	musicBot.Mutex.Unlock()
 	leaveVoiceChannel(session, guildId)
+}
+
+func (musicBot *MusicBot) skip() {
+	if musicBot.IsPlaying && musicBot.StreamingSession != nil {
+		select {
+		case musicBot.SkipChannel <- true:
+		default:
+		}
+	}
+}
+
+func (musicBot *MusicBot) stop() {
+	if musicBot.IsPlaying && musicBot.StreamingSession != nil {
+		select {
+		case musicBot.StopChannel <- true:
+		default:
+		}
+	}
+}
+
+func (musicBot *MusicBot) nowPlaying(session *discordgo.Session, interactionCreatedEvent *discordgo.InteractionCreate) {
+	responseToInteraction(session, interactionCreatedEvent.Interaction, fmt.Sprintf("Now Playing:\n%s", musicBot.NowPlaying.Title))
 }

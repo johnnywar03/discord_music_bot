@@ -66,6 +66,11 @@ var commands = []*discordgo.ApplicationCommand{
 		Name:        "skip",
 		Description: "Skip the music",
 	},
+
+	{
+		Name:        "nowplaying",
+		Description: "Get now playing video",
+	},
 }
 
 func registerCommand(client *discordgo.Session, pushCommand bool) (err error) {

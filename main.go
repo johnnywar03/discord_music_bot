@@ -53,9 +53,12 @@ func main() {
 	videoQueue = &VideoQueue{}
 
 	// Create music bot instance
-	musicBot = &MusicBot{}
-	musicBot.IsPlaying = false
-	musicBot.NowPlaying = nil
+	musicBot = &MusicBot{
+		IsPlaying:   false,
+		NowPlaying:  nil,
+		SkipChannel: make(chan bool, 1),
+		StopChannel: make(chan bool, 1),
+	}
 
 	// Start discord bot
 	err = client.Open()
@@ -120,13 +123,11 @@ func applicationCommandHandler(session *discordgo.Session, interactionCreatedEve
 			responseToInteraction(session, interactionCreatedEvent.Interaction, "Failed to join the voice channel.")
 			return
 		}
-		playVideo(session, interactionCreatedEvent.GuildID)
+		musicBot.playVideo(session, interactionCreatedEvent.GuildID)
 	case "leave":
-		err := leaveVoiceChannel(session, interactionCreatedEvent.GuildID)
-		if err != nil {
-			responseToInteraction(session, interactionCreatedEvent.Interaction, "Failed to leave the voice channel.")
-			return
-		}
+		responseToInteraction(session, interactionCreatedEvent.Interaction, "Processing...")
+		musicBot.stop()
+		updateInteractionResponse(session, interactionCreatedEvent.Interaction, "Bye!")
 	case "play":
 		// Join the voice channel if not connected to voice channel
 		err := joinVoiceChannel(session, interactionCreatedEvent)
@@ -150,7 +151,7 @@ func applicationCommandHandler(session *discordgo.Session, interactionCreatedEve
 		}
 		// Update the interaction
 		updateInteractionResponse(session, interactionCreatedEvent.Interaction, fmt.Sprintf("%s %s", title, " added to queue."))
-		playVideo(session, interactionCreatedEvent.GuildID)
+		musicBot.playVideo(session, interactionCreatedEvent.GuildID)
 	case "search":
 		responseToInteraction(session, interactionCreatedEvent.Interaction, "Processing...")
 		// Search for videos
@@ -224,13 +225,19 @@ func applicationCommandHandler(session *discordgo.Session, interactionCreatedEve
 		// Update the interaction
 		updateInteractionResponse(session, interactionCreatedEvent.Interaction, listOfVideo)
 	case "clear":
-		videoQueue.CurrentVideo = nil
+		musicBot.stop()
 		responseToInteraction(session, interactionCreatedEvent.Interaction, "Queue cleared")
 	case "skip":
-		// Wait to rewrite
-		title := videoQueue.CurrentVideo.Title
-		videoQueue.deleteFirst()
-		responseToInteraction(session, interactionCreatedEvent.Interaction, "Skipped "+title)
+		// If music bot is not playing
+		if !musicBot.IsPlaying || musicBot.NowPlaying == nil {
+			responseToInteraction(session, interactionCreatedEvent.Interaction, "No video is currently playing.")
+			return
+		}
+		responseToInteraction(session, interactionCreatedEvent.Interaction, "Skipping...")
+		// Skip the video
+		musicBot.skip()
+	case "nowplaying":
+		responseToInteraction(session, interactionCreatedEvent.Interaction, fmt.Sprintf("Now Playing:\n%s", musicBot.NowPlaying.Title))
 	default:
 		println("Received an unknown application command.")
 		responseToInteraction(session, interactionCreatedEvent.Interaction, "Error: unknown command.")
@@ -277,7 +284,7 @@ func interactionComponentHandler(session *discordgo.Session, interactionCreatedE
 			sendMessageToChannel(session, "Failed to join the voice channel.")
 			return
 		}
-		playVideo(session, interactionCreatedEvent.GuildID)
+		musicBot.playVideo(session, interactionCreatedEvent.GuildID)
 	default:
 		println("Received an unknown interaction component.")
 		updateComponentReponse(session, interactionCreatedEvent.Interaction, "Error: unknown interaction.")
