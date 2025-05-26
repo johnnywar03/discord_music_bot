@@ -1,5 +1,6 @@
 # Requirement
 - Linux (tested on ubuntu)
+- golang
 - ffmpeg
 - yt-dlp
 
@@ -11,4 +12,11 @@
     "commandChannelId": "",
     "pushCommand": true
 }
+```
+# How to install
+```bash
+git clone github.com/johnnywar03/discord_music_bot
+cd discord_music_bot
+go build
+./main
 ```
