@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 )
 
+// Remove all files from the specific directory
 func remove(filePath string) (err error) {
 	directory, err := os.Open(filePath)
 	if err != nil {
