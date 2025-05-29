@@ -24,7 +24,7 @@ snap install ffmpeg
 ```
 ## yt-dlp
 ```bash
-snap install bash
+snap install yt-dlp
 ```
 ## This repo
 ```bash
