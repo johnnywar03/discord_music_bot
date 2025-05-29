@@ -1,6 +1,6 @@
 # Requirement
 - Linux (tested on ubuntu)
-- golang
+- go
 - ffmpeg
 - yt-dlp
 
@@ -33,3 +33,6 @@ cd discord_music_bot
 go build
 ./main
 ```
+# Project
+This is my little project to learn go.
+I may not maintain this project.
