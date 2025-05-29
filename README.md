@@ -14,6 +14,19 @@
 }
 ```
 # How to install
+## golang
+```bash
+snap install go
+```
+## ffmpeg
+```bash
+snap install ffmpeg
+```
+## yt-dlp
+```bash
+snap install bash
+```
+## This repo
 ```bash
 git clone github.com/johnnywar03/discord_music_bot
 cd discord_music_bot
