@@ -1,20 +1,30 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"regexp"
 	"syscall"
 
-	"github.com/bwmarrin/discordgo"
+	"github.com/disgoorg/disgo"
+	"github.com/disgoorg/disgo/bot"
+	"github.com/disgoorg/disgo/cache"
+	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/events"
+	"github.com/disgoorg/disgo/gateway"
+	"github.com/disgoorg/disgo/voice"
+	"github.com/disgoorg/godave/golibdave"
+	"github.com/disgoorg/snowflake/v2"
 )
 
 type jsonBotConfig struct {
 	APIKey           string
-	CommandChannelId string
+	CommandChannelId snowflake.ID
 	PushCommand      bool
 }
 
@@ -22,6 +32,7 @@ var botConfig jsonBotConfig
 var thisFilePath string
 var videoQueue *VideoQueue
 var musicBot *MusicBot
+var client *bot.Client
 
 func main() {
 	// Get executable directory
@@ -37,36 +48,39 @@ func main() {
 		panic(err.Error())
 	}
 
-	// Create discord bot session
-	client, err := discordgo.New("Bot " + botConfig.APIKey)
-	if err != nil {
-		panic(err.Error())
-	}
-
-	// Add application command handler
-	client.AddHandler(interactionHandler)
-
-	// Set discord bot intents
-	client.Identify.Intents = discordgo.IntentsAllWithoutPrivileged
-
 	// Create video queue
 	videoQueue = &VideoQueue{}
 
 	// Create music bot instance
-	musicBot = &MusicBot{
-		IsPlaying:   false,
-		NowPlaying:  nil,
-		SkipChannel: make(chan bool, 1),
-		StopChannel: make(chan bool, 1),
-	}
+	musicBot = NewMusicBot()
 
-	// Start discord bot
-	err = client.Open()
+	// Create discord bot client
+	client, err = disgo.New(botConfig.APIKey,
+		bot.WithGatewayConfigOpts(
+			gateway.WithIntents(gateway.IntentsNonPrivileged),
+		),
+		// VoiceStates need to be cached so joinVoiceChannel can look up which
+		// channel the command issuer is currently in.
+		bot.WithCacheConfigOpts(
+			cache.WithCaches(cache.FlagVoiceStates),
+		),
+		// Discord now requires the E2EE/DAVE protocol for voice connections.
+		// The noop DAVE session (disgo's default) can no longer complete the
+		// voice gateway handshake, so we wire in the real libdave-backed
+		// implementation from disgoorg/godave instead. This requires CGO to
+		// be enabled and the libdave native library to be installed at build
+		// time (see github.com/disgoorg/godave's libdave_install script).
+		bot.WithVoiceManagerConfigOpts(
+			voice.WithDaveSessionCreateFunc(golibdave.NewSession),
+		),
+		bot.WithEventListenerFunc(onReady),
+		bot.WithEventListenerFunc(onApplicationCommand),
+		bot.WithEventListenerFunc(onComponentInteraction),
+	)
 	if err != nil {
-		println("Error in opening connection, ", err.Error())
-		return
+		panic(err.Error())
 	}
-	defer client.Close()
+	defer client.Close(context.Background())
 
 	// Register slash commands
 	err = registerCommand(client, botConfig.PushCommand)
@@ -74,255 +88,245 @@ func main() {
 		panic(err.Error())
 	}
 
-	// Press CTRL-C to close discord bot
-	println(client.State.User.Username + " is now running. Press CTRL-C to exit.")
-	sc := make(chan os.Signal, 1)
-	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
-	<-sc
-
-	client.Close()
-}
-
-func interactionHandler(session *discordgo.Session, interactionCreatedEvent *discordgo.InteractionCreate) {
-	// Specify a channel for communicate
-	if interactionCreatedEvent.ChannelID != botConfig.CommandChannelId {
-		session.InteractionRespond(interactionCreatedEvent.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{Content: "Wrong channel! Please use specific channel!"},
-		})
+	// Start discord bot
+	err = client.OpenGateway(context.Background())
+	if err != nil {
+		println("Error in opening connection, ", err.Error())
 		return
 	}
 
-	switch interactionCreatedEvent.Type {
-	case discordgo.InteractionApplicationCommand:
-		applicationCommandHandler(session, interactionCreatedEvent)
-	case discordgo.InteractionMessageComponent:
-		interactionComponentHandler(session, interactionCreatedEvent)
-	default:
-		panic("Received an unknow CreatedInterationEvent type.")
-	}
+	// Press CTRL-C to close discord bot
+	println("Bot is now running. Press CTRL-C to exit.")
+	sc := make(chan os.Signal, 1)
+	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
+	<-sc
 }
 
-func applicationCommandHandler(session *discordgo.Session, interactionCreatedEvent *discordgo.InteractionCreate) {
-	// Get the application command data
-	applicationCommandData := interactionCreatedEvent.ApplicationCommandData()
+func onReady(event *events.Ready) {
+	println(event.User.Username + " is ready.")
+}
+
+func onApplicationCommand(event *events.ApplicationCommandInteractionCreate) {
+	// Specify a channel for communicate
+	if event.Channel().ID() != botConfig.CommandChannelId {
+		_ = event.CreateMessage(discord.NewMessageCreate().WithContent("Wrong channel! Please use specific channel!"))
+		return
+	}
+
+	data := event.SlashCommandInteractionData()
 	// A switch case to handle commands
-	switch applicationCommandData.Name {
+	switch data.CommandName() {
 	case "help":
 		// Get discord bot owner info
-		app, err := session.Application("@me")
+		app, err := client.Rest.GetCurrentApplication()
 		if err != nil {
 			println("Error in getting owner info, ", err.Error())
 			return
 		}
 		// Response to the application command
-		responseToInteraction(session, interactionCreatedEvent.Interaction, "Ask "+app.Owner.Username)
+		_ = event.CreateMessage(discord.NewMessageCreate().WithContent("Ask " + app.Owner.Username))
 	case "join":
-		err := joinVoiceChannel(session, interactionCreatedEvent)
-		if err != nil {
-			responseToInteraction(session, interactionCreatedEvent.Interaction, "Failed to join the voice channel.")
-			return
-		}
-		musicBot.playVideo(session, interactionCreatedEvent.GuildID)
+		_ = event.CreateMessage(discord.NewMessageCreate().WithContent("Joining..."))
+		guildID := *event.GuildID()
+		userID := event.User().ID
+		go func() {
+			err := joinVoiceChannel(context.Background(), client, guildID, userID)
+			if err != nil {
+				updateInteractionResponse(event, "Failed to join the voice channel.")
+				return
+			}
+			updateInteractionResponse(event, "Joined!")
+			musicBot.playVideo(context.Background(), client, guildID)
+		}()
 	case "leave":
-		responseToInteraction(session, interactionCreatedEvent.Interaction, "Processing...")
+		_ = event.CreateMessage(discord.NewMessageCreate().WithContent("Processing..."))
 		musicBot.stop()
-		updateInteractionResponse(session, interactionCreatedEvent.Interaction, "Bye!")
+		if err := remove(thisFilePath + "/video"); err != nil {
+			slog.Warn("failed to clean up video directory", "error", err)
+		}
+		updateInteractionResponse(event, "Bye!")
 	case "play":
-		// Join the voice channel if not connected to voice channel
-		err := joinVoiceChannel(session, interactionCreatedEvent)
-		if err != nil {
-			responseToInteraction(session, interactionCreatedEvent.Interaction, "Failed to join the voice channel.")
-			return
-		}
-
-		// Response to the interaction first in within 3 second
-		responseToInteraction(session, interactionCreatedEvent.Interaction, "Processing...")
-
-		// Extract video id from url
-		regex := regexp.MustCompile(`(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})`)
-		videoId := regex.FindStringSubmatch(interactionCreatedEvent.ApplicationCommandData().Options[0].StringValue())[1]
-
-		// Add video to the queue
-		title, err := videoQueue.add(videoId)
-		if err != nil {
-			responseToInteraction(session, interactionCreatedEvent.Interaction, err.Error())
-			return
-		}
-		// Update the interaction
-		updateInteractionResponse(session, interactionCreatedEvent.Interaction, fmt.Sprintf("%s %s", title, " added to queue."))
-		musicBot.playVideo(session, interactionCreatedEvent.GuildID)
+		guildID := *event.GuildID()
+		_ = event.CreateMessage(discord.NewMessageCreate().WithContent("Processing..."))
+		userID := event.User().ID
+		go func() {
+			err := joinVoiceChannel(context.Background(), client, guildID, userID)
+			if err != nil {
+				updateInteractionResponse(event, "Failed to join the voice channel.")
+				return
+			}
+			regex := regexp.MustCompile(`(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})`)
+			videoId := regex.FindStringSubmatch(data.String("url"))[1]
+			title, err := videoQueue.add(videoId)
+			if err != nil {
+				updateInteractionResponse(event, err.Error())
+				return
+			}
+			updateInteractionResponse(event, fmt.Sprintf("%s added to queue.", title))
+			musicBot.playVideo(context.Background(), client, guildID)
+		}()
 	case "search":
-		responseToInteraction(session, interactionCreatedEvent.Interaction, "Processing...")
-		// Search for videos
-		videoArray, err := search(interactionCreatedEvent.ApplicationCommandData().Options[0].StringValue())
-		if err != nil {
-			updateInteractionResponse(session, interactionCreatedEvent.Interaction, "Error: cannot search.")
-			return
-		}
+		_ = event.CreateMessage(discord.NewMessageCreate().WithContent("Processing..."))
+		// search() shells out to yt-dlp to query YouTube, which can block for a
+		// long time. Run it off the gateway goroutine so heartbeat ACKs keep
+		// being processed.
+		go func() {
+			videoArray, err := search(data.String("name"))
+			if err != nil {
+				updateInteractionResponse(event, "Error: cannot search.")
+				return
+			}
 
-		// Convert array to discord select menu options
-		var options []discordgo.SelectMenuOption
-		for _, video := range videoArray {
-			options = append(options, discordgo.SelectMenuOption{
-				Label: video.Title,
-				Value: video.Id,
-			})
-		}
-		// Add cancel buttion/option to the select menu options
-		options = addCancelOption(options)
-		selectMenu := &discordgo.SelectMenu{
-			CustomID:    "search",
-			Placeholder: "Select a video",
-			Options:     options,
-		}
-		// Warp select menu to the actions row
-		components := discordgo.ActionsRow{
-			Components: []discordgo.MessageComponent{selectMenu},
-		}
+			// Convert array to discord select menu options
+			var options []discord.StringSelectMenuOption
+			for _, video := range videoArray {
+				options = append(options, discord.NewStringSelectMenuOption(video.Title, video.Id))
+			}
+			// Add cancel option to the select menu options
+			options = addCancelOption(options)
+			selectMenu := discord.NewStringSelectMenu("search", "Select a video", options...)
 
-		updateInteractionResponse(session, interactionCreatedEvent.Interaction, "Please select a video", components)
+			updateInteractionResponseWithMenu(event, "Please select a video", selectMenu)
+		}()
 	case "remove":
-		responseToInteraction(session, interactionCreatedEvent.Interaction, "Processing...")
+		_ = event.CreateMessage(discord.NewMessageCreate().WithContent("Processing..."))
 		// Convert linked list to array
 		videoArray, err := videoQueue.toArray()
 		if err != nil {
-			updateInteractionResponse(session, interactionCreatedEvent.Interaction, "The queue is empty.")
+			updateInteractionResponse(event, "The queue is empty.")
 			return
 		}
 
 		// Convert array to discord select menu options, skip the first element
-		var options []discordgo.SelectMenuOption
+		var options []discord.StringSelectMenuOption
 		for _, video := range videoArray[1:] {
-			options = append(options, discordgo.SelectMenuOption{
-				Label: video.Title,
-				Value: video.Id,
-			})
+			options = append(options, discord.NewStringSelectMenuOption(video.Title, video.Id))
 		}
-		// Add cancel buttion/option to the select menu options
+		// Add cancel option to the select menu options
 		options = addCancelOption(options)
-		selectMenu := &discordgo.SelectMenu{
-			CustomID:    "remove",
-			Placeholder: "Select a video",
-			Options:     options,
-		}
-		// Warp select menu to the actions row
-		components := discordgo.ActionsRow{
-			Components: []discordgo.MessageComponent{selectMenu},
-		}
+		selectMenu := discord.NewStringSelectMenu("remove", "Select a video", options...)
 
-		updateInteractionResponse(session, interactionCreatedEvent.Interaction, "Please select a video", components)
+		updateInteractionResponseWithMenu(event, "Please select a video", selectMenu)
 	case "list":
 		// Response to the interaction first in within 3 second
-		responseToInteraction(session, interactionCreatedEvent.Interaction, "Processing...")
+		_ = event.CreateMessage(discord.NewMessageCreate().WithContent("Processing..."))
 
 		// Implement queue system first
 		listOfVideo := videoQueue.list()
 		if listOfVideo == "" {
-			updateInteractionResponse(session, interactionCreatedEvent.Interaction, "The queue is empty.")
+			updateInteractionResponse(event, "The queue is empty.")
 			return
 		}
 		// Update the interaction
-		updateInteractionResponse(session, interactionCreatedEvent.Interaction, listOfVideo)
+		updateInteractionResponse(event, listOfVideo)
 	case "clear":
 		musicBot.stop()
-		responseToInteraction(session, interactionCreatedEvent.Interaction, "Queue cleared")
+		if err := remove(thisFilePath + "/video"); err != nil {
+			slog.Warn("failed to clean up video directory", "error", err)
+		}
+		_ = event.CreateMessage(discord.NewMessageCreate().WithContent("Queue cleared"))
 	case "skip":
 		// If music bot is not playing
-		if !musicBot.IsPlaying || musicBot.NowPlaying == nil {
-			responseToInteraction(session, interactionCreatedEvent.Interaction, "No video is currently playing.")
+		nowPlaying := musicBot.NowPlaying()
+		if !musicBot.IsPlaying() || nowPlaying == nil {
+			_ = event.CreateMessage(discord.NewMessageCreate().WithContent("No video is currently playing."))
 			return
 		}
-		responseToInteraction(session, interactionCreatedEvent.Interaction, "Skipping...")
+		_ = event.CreateMessage(discord.NewMessageCreate().WithContent("Skipping..."))
 		// Skip the video
 		musicBot.skip()
 	case "nowplaying":
-		responseToInteraction(session, interactionCreatedEvent.Interaction, fmt.Sprintf("Now Playing:\n%s", musicBot.NowPlaying.Title))
+		nowPlaying := musicBot.NowPlaying()
+		if nowPlaying == nil {
+			_ = event.CreateMessage(discord.NewMessageCreate().WithContent("No video is currently playing."))
+			return
+		}
+		_ = event.CreateMessage(discord.NewMessageCreate().WithContentf("Now Playing:\n%s", nowPlaying.Title))
 	default:
 		println("Received an unknown application command.")
-		responseToInteraction(session, interactionCreatedEvent.Interaction, "Error: unknown command.")
+		_ = event.CreateMessage(discord.NewMessageCreate().WithContent("Error: unknown command."))
 	}
 }
 
-func interactionComponentHandler(session *discordgo.Session, interactionCreatedEvent *discordgo.InteractionCreate) {
-	// Get interaction component data
-	componentData := interactionCreatedEvent.MessageComponentData()
+func onComponentInteraction(event *events.ComponentInteractionCreate) {
+	// Specify a channel for communicate
+	if event.Channel().ID() != botConfig.CommandChannelId {
+		_ = event.CreateMessage(discord.NewMessageCreate().WithContent("Wrong channel! Please use specific channel!"))
+		return
+	}
+
 	// Use switch case to handle different command
-	switch componentData.CustomID {
+	switch event.Data.CustomID() {
 	case "remove":
+		data := event.StringSelectMenuInteractionData()
 		// Handle cancel option
-		if componentData.Values[0] == "cancel" {
-			updateComponentReponse(session, interactionCreatedEvent.Interaction, "Action cancel.")
+		if data.Values[0] == "cancel" {
+			_ = event.UpdateMessage(discord.NewMessageUpdate().WithContent("Action cancel."))
 			return
 		}
-		updateComponentReponse(session, interactionCreatedEvent.Interaction, "Processing...")
-		id := componentData.Values[0]
+		_ = event.UpdateMessage(discord.NewMessageUpdate().WithContent("Processing..."))
+		id := data.Values[0]
 		// Delete video from queue
 		title, err := videoQueue.deleteSpecific(id)
 		if err != nil {
-			updateComponentReponse(session, interactionCreatedEvent.Interaction, "Error: failed to delete video from the queue.")
+			updateComponentInteractionResponse(event, "Error: failed to delete video from the queue.")
 			return
 		}
-		updateInteractionResponse(session, interactionCreatedEvent.Interaction, title+" removed from the queue.")
+		updateComponentInteractionResponse(event, title+" removed from the queue.")
 	case "search":
+		data := event.StringSelectMenuInteractionData()
 		// Handle cancel option
-		if componentData.Values[0] == "cancel" {
-			updateComponentReponse(session, interactionCreatedEvent.Interaction, "Action cancel.")
+		if data.Values[0] == "cancel" {
+			_ = event.UpdateMessage(discord.NewMessageUpdate().WithContent("Action cancel."))
 			return
 		}
-		updateComponentReponse(session, interactionCreatedEvent.Interaction, "Processing...")
-		id := componentData.Values[0]
-		// Add video to the queue
-		title, err := videoQueue.add(id)
-		if err != nil {
-			updateComponentReponse(session, interactionCreatedEvent.Interaction, "Error: failed to add video to the queue.")
-			return
-		}
-		updateInteractionResponse(session, interactionCreatedEvent.Interaction, title+" added to queue.")
-		err = joinVoiceChannel(session, interactionCreatedEvent)
-		if err != nil {
-			sendMessageToChannel(session, "Failed to join the voice channel.")
-			return
-		}
-		musicBot.playVideo(session, interactionCreatedEvent.GuildID)
+		_ = event.UpdateMessage(discord.NewMessageUpdate().WithContent("Processing..."))
+		id := data.Values[0]
+		// videoQueue.add() shells out to yt-dlp to fetch the title, which can
+		// block for a long time. Run the rest of this handler off the gateway
+		// goroutine so heartbeat ACKs keep being processed.
+		go func() {
+			// Add video to the queue
+			title, err := videoQueue.add(id)
+			if err != nil {
+				updateComponentInteractionResponse(event, "Error: failed to add video to the queue.")
+				return
+			}
+			updateComponentInteractionResponse(event, title+" added to queue.")
+			guildID := *event.GuildID()
+
+			err = joinVoiceChannel(context.Background(), client, guildID, event.User().ID)
+			if err != nil {
+				sendMessageToChannel(client, "Failed to join the voice channel.")
+				return
+			}
+			musicBot.playVideo(context.Background(), client, guildID)
+		}()
 	default:
 		println("Received an unknown interaction component.")
-		updateComponentReponse(session, interactionCreatedEvent.Interaction, "Error: unknown interaction.")
+		_ = event.UpdateMessage(discord.NewMessageUpdate().WithContent("Error: unknown interaction."))
 	}
 }
 
-func sendMessageToChannel(session *discordgo.Session, content string) {
-	session.ChannelMessageSend(botConfig.CommandChannelId, content)
+func sendMessageToChannel(client *bot.Client, content string) {
+	_, _ = client.Rest.CreateMessage(botConfig.CommandChannelId, discord.NewMessageCreate().WithContent(content))
 }
 
-func responseToInteraction(session *discordgo.Session, interaction *discordgo.Interaction, content string) {
-	session.InteractionRespond(interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Content: content,
-		},
-	})
+// updateInteractionResponse edits the original response to an application
+// command interaction. This is the equivalent of discordgo's
+// InteractionResponseEdit and is used after the initial "Processing..." ack.
+func updateInteractionResponse(event *events.ApplicationCommandInteractionCreate, content string) {
+	_, _ = client.Rest.UpdateInteractionResponse(client.ApplicationID, event.Token(), discord.NewMessageUpdate().WithContent(content))
 }
 
-func updateInteractionResponse(session *discordgo.Session, interaction *discordgo.Interaction, content string, components ...discordgo.MessageComponent) {
-	session.InteractionResponseEdit(interaction, &discordgo.WebhookEdit{
-		Content:    &content,
-		Components: &components,
-	})
+func updateInteractionResponseWithMenu(event *events.ApplicationCommandInteractionCreate, content string, selectMenu discord.StringSelectMenuComponent) {
+	_, _ = client.Rest.UpdateInteractionResponse(client.ApplicationID, event.Token(), discord.NewMessageUpdate().WithContent(content).AddActionRow(selectMenu))
 }
 
-func updateComponentReponse(session *discordgo.Session, interaction *discordgo.Interaction, content string) {
-	session.InteractionRespond(interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseUpdateMessage,
-		Data: &discordgo.InteractionResponseData{
-			Content: content,
-		},
-	})
+func updateComponentInteractionResponse(event *events.ComponentInteractionCreate, content string) {
+	_, _ = client.Rest.UpdateInteractionResponse(client.ApplicationID, event.Token(), discord.NewMessageUpdate().WithContent(content))
 }
 
-func addCancelOption(option []discordgo.SelectMenuOption) (options []discordgo.SelectMenuOption) {
-	return append(option, discordgo.SelectMenuOption{
-		Label: "Cancel",
-		Value: "cancel",
-	})
+func addCancelOption(options []discord.StringSelectMenuOption) []discord.StringSelectMenuOption {
+	return append(options, discord.NewStringSelectMenuOption("Cancel", "cancel"))
 }
