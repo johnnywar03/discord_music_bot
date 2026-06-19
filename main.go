@@ -261,10 +261,10 @@ func onComponentInteraction(event *events.ComponentInteractionCreate) {
 		data := event.StringSelectMenuInteractionData()
 		// Handle cancel option
 		if data.Values[0] == "cancel" {
-			_ = event.UpdateMessage(discord.NewMessageUpdate().WithContent("Action cancel."))
+			_ = event.UpdateMessage(discord.NewMessageUpdate().WithContent("Action cancel.").ClearComponents())
 			return
 		}
-		_ = event.UpdateMessage(discord.NewMessageUpdate().WithContent("Processing..."))
+		_ = event.UpdateMessage(discord.NewMessageUpdate().WithContent("Processing...").ClearComponents())
 		id := data.Values[0]
 		// Delete video from queue
 		title, err := videoQueue.deleteSpecific(id)
@@ -277,10 +277,10 @@ func onComponentInteraction(event *events.ComponentInteractionCreate) {
 		data := event.StringSelectMenuInteractionData()
 		// Handle cancel option
 		if data.Values[0] == "cancel" {
-			_ = event.UpdateMessage(discord.NewMessageUpdate().WithContent("Action cancel."))
+			_ = event.UpdateMessage(discord.NewMessageUpdate().WithContent("Action cancel.").ClearComponents())
 			return
 		}
-		_ = event.UpdateMessage(discord.NewMessageUpdate().WithContent("Processing..."))
+		_ = event.UpdateMessage(discord.NewMessageUpdate().WithContent("Processing...").ClearComponents())
 		id := data.Values[0]
 		// videoQueue.add() shells out to yt-dlp to fetch the title, which can
 		// block for a long time. Run the rest of this handler off the gateway
@@ -304,7 +304,7 @@ func onComponentInteraction(event *events.ComponentInteractionCreate) {
 		}()
 	default:
 		println("Received an unknown interaction component.")
-		_ = event.UpdateMessage(discord.NewMessageUpdate().WithContent("Error: unknown interaction."))
+		_ = event.UpdateMessage(discord.NewMessageUpdate().WithContent("Error: unknown interaction.").ClearComponents())
 	}
 }
 
@@ -324,7 +324,7 @@ func updateInteractionResponseWithMenu(event *events.ApplicationCommandInteracti
 }
 
 func updateComponentInteractionResponse(event *events.ComponentInteractionCreate, content string) {
-	_, _ = client.Rest.UpdateInteractionResponse(client.ApplicationID, event.Token(), discord.NewMessageUpdate().WithContent(content))
+	_, _ = client.Rest.UpdateInteractionResponse(client.ApplicationID, event.Token(), discord.NewMessageUpdate().WithContent(content).ClearComponents())
 }
 
 func addCancelOption(options []discord.StringSelectMenuOption) []discord.StringSelectMenuOption {
